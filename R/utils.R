@@ -1,35 +1,29 @@
-# check dir exists and is indeed a dir
-checkDir = function(dirname, dir) {
-  if (!file.exists(dir))
-    stopf("%s directory does not exists: %s", dirname, dir)
-  if (!isDirectory(dir))
-    stopf("% directory is not a directory: %s", dirname, dir)
-}
 
 isShowInfoEnabled = function() {
   getPMOptShowInfo()
 }
 
-# show message if show.info is TRUE
-showInfoMessage = function(msg, ...) {
-  if (isShowInfoEnabled()) {
+# show message if OPTION show.info is TRUE
+#  show.info ARGUMENT provides an immediate OVERRIDE to that option
+showInfoMessage = function(msg, ..., show.info=NA) {
+  if ((is.na(show.info) && isShowInfoEnabled()) ||
+    (!is.na(show.info) && show.info)) {
     messagef(msg, ...)
   }
 }
 
 showStartupMsg = function(mode, cpus, socket.hosts) {
   if (mode != MODE_LOCAL) {
-    if (mode %in% c(MODE_MULTICORE, MODE_MPI) || 
+    if (mode %in% c(MODE_MULTICORE, MODE_MPI) ||
       (mode == MODE_SOCKET && !is.na(cpus))) {
       showInfoMessage("Starting parallelization in mode=%s with cpus=%i.",
         mode, cpus)
     } else if (mode == MODE_SOCKET) {
-      showInfoMessage("Starting parallelization in mode=%s on %i hosts.", 
+      showInfoMessage("Starting parallelization in mode=%s on %i hosts.",
         mode, length(socket.hosts))
     } else if (mode == MODE_BATCHJOBS) {
-      #FIXME function is exported in later bj version, also then depend on it
-      showInfoMessage("Starting parallelization in mode=%s-%s.", 
-        mode, getBJConfig()$cluster.functions$name)
+      showInfoMessage("Starting parallelization in mode=%s-%s.",
+        mode, BatchJobs::getConfig()$cluster.functions$name)
     }
   }
 }

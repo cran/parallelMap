@@ -5,12 +5,12 @@
 #' @param package [\code{character(1)}]\cr
 #'   Name of your package.
 #' @param levels [\code{character(1)}]\cr
-#'   Availabe levels that used in your \code{\link{parallelMap}} operations in your package.
+#'   Availabe levels that are used in the \code{\link{parallelMap}} operations of your package.
 #' @return Nothing.
 #' @export
 parallelRegisterLevels = function(package, levels) {
-  checkArg(package, "character", len=1L, na.ok=FALSE)
-  checkArg(levels, "character", na.ok=FALSE)
+  assertString(package)
+  assertCharacter(levels, any.missing = FALSE)
   reg.levs = getPMOption("registered.levels", list())
   reg.levs[[package]] = levels
   options(parallelMap.registered.levels = reg.levs)
