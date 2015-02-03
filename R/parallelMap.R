@@ -59,7 +59,7 @@
 #' parallelMap(identity, 1:2)
 #' parallelStop()
 parallelMap = function(fun, ..., more.args = list(), simplify = FALSE, use.names = FALSE,
-  impute.error = NULL, level = as.character(NA), show.info = NA) {
+  impute.error = NULL, level = NA_character_, show.info = NA) {
 
   assertFunction(fun)
   assertList(more.args)
@@ -74,6 +74,9 @@ parallelMap = function(fun, ..., more.args = list(), simplify = FALSE, use.names
   }
   assertString(level, na.ok = TRUE)
   assertFlag(show.info, na.ok = TRUE)
+
+  if (!is.na(level) && level %nin% unlist(getPMOption("registered.levels", list())))
+    stopf("Level '%s' not registered", level)
 
   cpus = getPMOptCpus()
   logging = getPMOptLogging()
@@ -94,12 +97,7 @@ parallelMap = function(fun, ..., more.args = list(), simplify = FALSE, use.names
     } else {
       fun2 = fun
     }
-    # copy exported objects in PKG_LOCAL_ENV to env of fun so we can find them in any case in call
-    ee = environment(fun)
-    ns = ls(PKG_LOCAL_ENV)
-    for (n in ns)
-      assign(n, get(n, envir = PKG_LOCAL_ENV), envir = ee)
-
+    assignInFunctionNamespace(fun, env = PKG_LOCAL_ENV)
     res = mapply(fun2, ..., MoreArgs = more.args, SIMPLIFY = FALSE, USE.NAMES = FALSE)
   } else {
     iters = seq_along(..1)
@@ -107,71 +105,50 @@ parallelMap = function(fun, ..., more.args = list(), simplify = FALSE, use.names
       getPMOptMode(), getPMOptCpus(), length(iters), show.info = show.info)
 
     if (isModeMulticore()) {
-      # copy exported objects in PKG_LOCAL_ENV to env of fun so we can find them in any case in call
-      ee = environment(fun)
-      ns = ls(PKG_LOCAL_ENV)
-      for (n in ns)
-        assign(n, get(n, envir = PKG_LOCAL_ENV), envir = ee)
-
       more.args = c(list(.fun = fun, .logdir = logdir), more.args)
-      res = mcmapply_fixed(slaveWrapper, ..., .i = iters, MoreArgs = more.args, mc.cores = cpus,
+      res = MulticoreClusterMap(slaveWrapper, ..., .i = iters, MoreArgs = more.args, mc.cores = cpus,
         SIMPLIFY = FALSE, USE.NAMES = FALSE)
-      # res = parallel::mcmapply(slaveWrapper, ..., .i = iters, MoreArgs = more.args, mc.cores = cpus,
-      # SIMPLIFY = FALSE, USE.NAMES = FALSE)
     } else if (isModeSocket() || isModeMPI()) {
       more.args = c(list(.fun = fun, .logdir = logdir), more.args)
       res = clusterMap(cl = NULL, slaveWrapper, ..., .i = iters, MoreArgs = more.args,
         SIMPLIFY = FALSE, USE.NAMES = FALSE)
     } else if (isModeBatchJobs()) {
-      fd = getBatchJobsRegFileDir()
-      # FIXME: this is bad but currently we cannot use absolute paths
-      src.files = optionBatchsJobsSrcFiles()
-      wd = getwd()
-      srcdir = tempfile(pattern = "parallelMap_BatchJobs_srcs_", tmpdir = wd)
-      dir.create(srcdir)
-      file.copy(from = src.files, to = srcdir)
-      # create registry in selected directory with random, unique name
       stop.on.error = is.null(impute.error)
+      # dont log extra in BatchJobs
+      more.args = c(list(.fun = fun, .logdir = NA_character_), more.args)
       suppressMessages({
-        reg = makeRegistry(id = basename(fd), file.dir = fd, work.dir = wd,
-          # get packages and sources to load on slaves which where collected in R option
-          packages = optionBatchsJobsPackages(),
-          src.files = paste(basename(srcdir), basename(src.files), sep = "/")
-        )
-        file.exports = list.files(getBatchJobsExportsDir(), full.names = TRUE)
-        file.rename(from = file.exports,
-          to = file.path(BatchJobs:::getExportDir(reg$file.dir), basename(file.exports)))
-        # dont log extra in BatchJobs
-        more.args = c(list(.fun = fun, .logdir = NA_character_), more.args)
-        batchMap(reg, slaveWrapper, ..., more.args = more.args)
+        reg = getBatchJobsReg()
+        BatchJobs:::dbRemoveJobs(reg, BatchJobs::getJobIds(reg))
+        BatchJobs::batchMap(reg, slaveWrapper, ..., more.args = more.args)
         # increase max.retries a bit, we dont want to abort here prematurely
         # if no resources set we submit with the default ones from the bj conf
-        submitJobs(reg, resources = getPMOptBatchJobsResources(), max.retries = 15)
-        ok = waitForJobs(reg, stop.on.error = stop.on.error)
+        BatchJobs::submitJobs(reg, resources = getPMOptBatchJobsResources(), max.retries = 15)
+        ok = BatchJobs::waitForJobs(reg, stop.on.error = stop.on.error)
       })
       # copy log files of terminated jobs to designated dir
       if (!is.na(logdir)) {
-        term = findTerminated(reg)
-        fns = getLogFiles(reg, term)
+        term = BatchJobs::findTerminated(reg)
+        fns = BatchJobs::getLogFiles(reg, term)
         dests = file.path(logdir, sprintf("%05i.log", term))
         file.copy(from = fns, to = dests)
       }
-      ids = getJobIds(reg)
-      ids.err = findErrors(reg)
-      ids.exp = findExpired(reg)
-      ids.done = findDone(reg)
+      ids = BatchJobs::getJobIds(reg)
+      ids.err = BatchJobs::findErrors(reg)
+      ids.exp = BatchJobs::findExpired(reg)
+      ids.done = BatchJobs::findDone(reg)
       ids.notdone = c(ids.err, ids.exp)
       # construct notdone error messages
       msgs = rep("Job expired!", length(ids.notdone))
       msgs[ids.err] = BatchJobs::getErrorMessages(reg, ids.err)
       # handle errors (no impute): kill other jobs + stop on master
       if (is.null(impute.error) && length(c(ids.notdone)) > 0) {
-        extra.msg = sprintf("Please note that remaining jobs were killed when 1st error occurred to save cluster time.\nIf you want to further debug errors, your BatchJobs registry is here:\n%s", fd)
-        onsys = findOnSystem(reg)
+        extra.msg = sprintf("Please note that remaining jobs were killed when 1st error occurred to save cluster time.\nIf you want to further debug errors, your BatchJobs registry is here:\n%s",
+          reg$file.dir)
+        onsys = BatchJobs::findOnSystem(reg)
         suppressMessages(
-          killJobs(reg, onsys)
+          BatchJobs::killJobs(reg, onsys)
         )
-        onsys = findOnSystem(reg)
+        onsys = BatchJobs::findOnSystem(reg)
         if (length(onsys) > 0L)
           warningf("Still %i jobs from operation on system! kill them manually!", length(onsys))
         if (length(ids.notdone) > 0L)
@@ -179,13 +156,8 @@ parallelMap = function(fun, ..., more.args = list(), simplify = FALSE, use.names
       }
       # if we reached this line and error occured, we have impute.error != NULL (NULL --> stop before)
       res = vector("list", length(ids))
-      res[ids.done] = loadResults(reg, simplify = FALSE, use.names = FALSE)
+      res[ids.done] = BatchJobs::loadResults(reg, simplify = FALSE, use.names = FALSE)
       res[ids.notdone] = lapply(msgs, function(s) impute.error.fun(simpleError(s)))
-      # delete registry file dir, if an error happened this will still exist
-      # because we threw an exception above, logs also still exist
-      unlink(fd, recursive = TRUE)
-      #FIXME: see above about src.files
-      unlink(srcdir, recursive = TRUE)
     }
   }
 
@@ -249,4 +221,15 @@ slaveWrapper = function(..., .i, .fun, .logdir = NA_character_) {
     sink(NULL)
   }
   return(res)
+}
+
+assignInFunctionNamespace = function(fun, li = list(), env = new.env()) {
+  # copy exported objects in PKG_LOCAL_ENV to env of fun so we can find them in any case in call
+  ee = environment(fun)
+  ns = ls(env)
+  for (n in ns)
+    assign(n, get(n, envir = env), envir = ee)
+  ns = names(li)
+  for (n in ns)
+    assign(n, li[[n]], envir = ee)
 }

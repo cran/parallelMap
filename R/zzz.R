@@ -1,5 +1,6 @@
 #' @import BBmisc
 #' @import checkmate
+#' @import parallel
 
 # define constants
 MODE_LOCAL = "local"
@@ -13,6 +14,8 @@ STATUS_STARTED = "started"
 STATUS_STOPPED = "stopped"
 
 PKG_LOCAL_ENV = new.env()
+
+.MulticoreCluster = new.env()
 
 .onLoad = function(libname, pkgname) {
   # init all settings from defaults
@@ -30,4 +33,6 @@ PKG_LOCAL_ENV = new.env()
     parallelMap.registered.levels = list(),
     parallelMap.suppress.local.errors = FALSE
   )
+  # set defaults
+  makeMulticoreCluster()
 }

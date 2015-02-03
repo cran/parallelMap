@@ -57,7 +57,7 @@
 #'   Default is the option \code{parallelMap.default.logging} or, if not set,
 #'   \code{FALSE}.
 #' @param storagedir [\code{character(1)}]\cr
-#'   Existing directory where log files and intermediate objects for BatchsJobs
+#'   Existing directory where log files and intermediate objects for BatchJobs
 #'   mode are stored.
 #'   Note that all nodes must have write access to exactly this path.
 #'   Default is the current working directory.
@@ -75,10 +75,12 @@
 #'   Default ist FALSE, i.e. every error message is shown.
 #' @param ... [any]\cr
 #'   Optional parameters, for socket mode passed to \code{\link[parallel]{makePSOCKcluster}},
-#'   for mpi mode passed to \code{\link[parallel]{makeCluster}}.
+#'   for mpi mode passed to \code{\link[parallel]{makeCluster}} and for multicore
+#'   passed to \code{\link[parallel]{mcmapply}} (\code{mc.preschedule}, \code{mc.set.seed},
+#'   \code{mc.silent} and \code{mc.cleanup} are supported for multicore).
 #' @return Nothing.
 #' @export
-parallelStart = function(mode, cpus, socket.hosts, bj.resources=list(), logging, storagedir, level, show.info,
+parallelStart = function(mode, cpus, socket.hosts, bj.resources = list(), logging, storagedir, level, show.info,
   suppress.local.errors = FALSE, ...) {
   # if stop was not called, warn and do it now
   if (isStatusStarted() && !isModeLocal()) {
@@ -86,12 +88,19 @@ parallelStart = function(mode, cpus, socket.hosts, bj.resources=list(), logging,
     parallelStop()
   }
 
-  #FIXME what should we do onexit if an error happens in this function?
+  #FIXME: what should we do onexit if an error happens in this function?
 
   mode = getPMDefOptMode(mode)
   cpus = getPMDefOptCpus(cpus)
   socket.hosts = getPMDefOptSocketHosts(socket.hosts)
+
   level = getPMDefOptLevel(level)
+  rlevls = parallelGetRegisteredLevels()
+  if (!is.na(level) && level %nin% rlevls) {
+    warningf("Selected level='%s' not registered! This is likely an error! Note that you can also
+      register custom levels yourself to get rid of this warning, see ?parallelRegisterLevels.R",
+      level)
+  }
   logging = getPMDefOptLogging(logging)
   storagedir = getPMDefOptStorageDir(storagedir)
   # defaults are in batchjobs conf
@@ -143,19 +152,23 @@ parallelStart = function(mode, cpus, socket.hosts, bj.resources=list(), logging,
   }
 
   # init parallel packs / modes, if necessary
-  if (isModeSocket()) {
+  if (isModeMulticore()) {
+    cl = makeMulticoreCluster(...)
+  } else if (isModeSocket()) {
     # set names from cpus or socket.hosts, only 1 can be defined here
     cl = makePSOCKcluster(names = ifelse(is.na(cpus), socket.hosts, cpus), ...)
     setDefaultCluster(cl)
   } else if (isModeMPI()) {
-    cl = parallel::makeCluster(spec=cpus, type="MPI", ...)
+    cl = makeCluster(spec = cpus, type = "MPI", ...)
     setDefaultCluster(cl)
-    clusterSetRNGStream(cl=NULL)
+    clusterSetRNGStream(cl = NULL)
   } else if (isModeBatchJobs()) {
-   bjed = getBatchJobsExportsDir()
-   if (file.exists(bjed))
-     cleanUpBatchJobsExports()
-   dir.create(bjed)
+    # create registry in selected directory with random, unique name
+    fd = getBatchJobsNewRegFileDir()
+    wd = getwd()
+    suppressMessages({
+      reg = BatchJobs::makeRegistry(id = basename(fd), file.dir = fd, work.dir = wd)
+    })
   }
   invisible(NULL)
 }
@@ -163,34 +176,34 @@ parallelStart = function(mode, cpus, socket.hosts, bj.resources=list(), logging,
 #' @export
 #' @rdname parallelStart
 parallelStartLocal = function(show.info, suppress.local.errors = FALSE) {
-  parallelStart(mode=MODE_LOCAL, cpus=NA_integer_, level=NA_character_,
-    logging=FALSE, show.info=show.info, suppress.local.errors = suppress.local.errors)
+  parallelStart(mode = MODE_LOCAL, cpus = NA_integer_, level = NA_character_,
+    logging = FALSE, show.info = show.info, suppress.local.errors = suppress.local.errors)
 }
 
 #' @export
 #' @rdname parallelStart
-parallelStartMulticore = function(cpus, logging, storagedir, level, show.info) {
-  parallelStart(mode=MODE_MULTICORE, cpus=cpus, level=level, logging=logging,
-    storagedir=storagedir, show.info=show.info)
+parallelStartMulticore = function(cpus, logging, storagedir, level, show.info, ...) {
+  parallelStart(mode = MODE_MULTICORE, cpus = cpus, level = level, logging = logging,
+    storagedir = storagedir, show.info = show.info, ...)
 }
 
 #' @export
 #' @rdname parallelStart
 parallelStartSocket = function(cpus, socket.hosts, logging, storagedir, level, show.info, ...) {
-  parallelStart(mode=MODE_SOCKET, cpus=cpus, socket.hosts=socket.hosts, level=level, logging=logging,
-    storagedir=storagedir, show.info=show.info)
+  parallelStart(mode = MODE_SOCKET, cpus = cpus, socket.hosts = socket.hosts, level = level, logging = logging,
+    storagedir = storagedir, show.info = show.info, ...)
 }
 
 #' @export
 #' @rdname parallelStart
 parallelStartMPI = function(cpus, logging, storagedir, level, show.info, ...) {
-  parallelStart(mode=MODE_MPI, cpus=cpus, level=level, logging=logging,
-    storagedir=storagedir, show.info=show.info, ...)
+  parallelStart(mode = MODE_MPI, cpus = cpus, level = level, logging = logging,
+    storagedir = storagedir, show.info = show.info, ...)
 }
 
 #' @export
 #' @rdname parallelStart
-parallelStartBatchJobs = function(bj.resources=list(), logging, storagedir, level, show.info) {
-  parallelStart(mode=MODE_BATCHJOBS, level=level, logging=logging,
-    storagedir=storagedir, bj.resources=bj.resources, show.info=show.info)
+parallelStartBatchJobs = function(bj.resources = list(), logging, storagedir, level, show.info) {
+  parallelStart(mode = MODE_BATCHJOBS, level = level, logging = logging,
+    storagedir = storagedir, bj.resources = bj.resources, show.info = show.info)
 }
