@@ -62,10 +62,9 @@
 #'   Note that all nodes must have write access to exactly this path.
 #'   Default is the current working directory.
 #' @param level [\code{character(1)}]\cr
-#'   You can set this so only calls to \code{\link{parallelMap}} are parallelized
-#'   that have the same level specified.
+#'   You can set this so only calls to \code{\link{parallelMap}} that have exactly the same level are parallelized.
 #'   Default is the option \code{parallelMap.default.level} or, if not set,
-#'   \code{NA} which means all calls to \code{\link{parallelMap}} are are parallelized.
+#'   \code{NA} which means all calls to \code{\link{parallelMap}} are are potentially parallelized.
 #' @param show.info [\code{logical(1)}]\cr
 #'   Verbose output on console for all further package calls?
 #'   Default is the option \code{parallelMap.default.show.info} or, if not set,
@@ -95,7 +94,7 @@ parallelStart = function(mode, cpus, socket.hosts, bj.resources = list(), loggin
   socket.hosts = getPMDefOptSocketHosts(socket.hosts)
 
   level = getPMDefOptLevel(level)
-  rlevls = parallelGetRegisteredLevels()
+  rlevls = parallelGetRegisteredLevels(flatten = TRUE)
   if (!is.na(level) && level %nin% rlevls) {
     warningf("Selected level='%s' not registered! This is likely an error! Note that you can also
       register custom levels yourself to get rid of this warning, see ?parallelRegisterLevels.R",
@@ -142,7 +141,7 @@ parallelStart = function(mode, cpus, socket.hosts, bj.resources = list(), loggin
   showStartupMsg(mode, cpus, socket.hosts)
 
   # now load extra packs we need
-  requirePackages(getExtraPackages(mode), "parallelStart")
+  requirePackages(getExtraPackages(mode), why = "parallelStart")
 
   # delete log dirs from previous runs
   if (logging) {
@@ -156,7 +155,12 @@ parallelStart = function(mode, cpus, socket.hosts, bj.resources = list(), loggin
     cl = makeMulticoreCluster(...)
   } else if (isModeSocket()) {
     # set names from cpus or socket.hosts, only 1 can be defined here
-    cl = makePSOCKcluster(names = ifelse(is.na(cpus), socket.hosts, cpus), ...)
+    if (is.na(cpus)) {
+      names = socket.hosts
+    } else {
+      names = cpus
+    }
+    cl = makePSOCKcluster(names = names, ...)
     setDefaultCluster(cl)
   } else if (isModeMPI()) {
     cl = makeCluster(spec = cpus, type = "MPI", ...)
