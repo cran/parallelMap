@@ -1,6 +1,8 @@
 #' @import BBmisc
 #' @import checkmate
 #' @import parallel
+#' @importFrom utils getFromNamespace head tail
+#' @importFrom stats setNames
 
 # define constants
 MODE_LOCAL = "local"
@@ -8,7 +10,8 @@ MODE_MULTICORE = "multicore"
 MODE_SOCKET = "socket"
 MODE_MPI = "mpi"
 MODE_BATCHJOBS = "BatchJobs"
-MODES = c(MODE_LOCAL, MODE_MULTICORE, MODE_SOCKET, MODE_MPI, MODE_BATCHJOBS)
+MODE_BATCHTOOLS = "batchtools"
+MODES = c(MODE_LOCAL, MODE_MULTICORE, MODE_SOCKET, MODE_MPI, MODE_BATCHJOBS, MODE_BATCHTOOLS)
 
 STATUS_STARTED = "started"
 STATUS_STOPPED = "stopped"

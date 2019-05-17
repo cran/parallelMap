@@ -34,7 +34,7 @@
 #'   you want processes on multiple machines use \code{socket.hosts}.
 #'   Default is the option \code{parallelMap.default.cpus} or, if not set,
 #'   \code{\link[parallel]{detectCores}} for multicore mode,
-#'   \code{\link[Rmpi]{mpi.universe.size}} for mpi mode
+#'   \code{max(1, \link[Rmpi]{mpi.universe.size} - 1)} for mpi mode
 #'   and 1 for socket mode.
 #' @param socket.hosts [\code{character}]\cr
 #'   Only used in socket mode, otherwise ignored.
@@ -44,6 +44,9 @@
 #'   Resources like walltime for submitting jobs on HPC clusters via BatchJobs.
 #'   See \code{\link[BatchJobs]{submitJobs}}.
 #'   Defaults are taken from your BatchJobs config file.
+#' @param bt.resources [\code{list}]\cr
+#'   Analog to \code{bj.resources}.
+#'   See \code{\link[batchtools]{submitJobs}}.
 #' @param logging [\code{logical(1)}]\cr
 #'   Should slave output be logged to files via \code{\link{sink}} under the \code{storagedir}?
 #'   Files are named "<iteration_number>.log" and put into unique
@@ -65,6 +68,10 @@
 #'   You can set this so only calls to \code{\link{parallelMap}} that have exactly the same level are parallelized.
 #'   Default is the option \code{parallelMap.default.level} or, if not set,
 #'   \code{NA} which means all calls to \code{\link{parallelMap}} are are potentially parallelized.
+#' @param load.balancing [\code{logical(1)}]\cr
+#'   Enables load balancing for multicore, socket and mpi.
+#'   Set this to \code{TRUE} if you have heterogeneous runtimes.
+#'   Default is \code{FALSE}
 #' @param show.info [\code{logical(1)}]\cr
 #'   Verbose output on console for all further package calls?
 #'   Default is the option \code{parallelMap.default.show.info} or, if not set,
@@ -75,12 +82,13 @@
 #' @param ... [any]\cr
 #'   Optional parameters, for socket mode passed to \code{\link[parallel]{makePSOCKcluster}},
 #'   for mpi mode passed to \code{\link[parallel]{makeCluster}} and for multicore
-#'   passed to \code{\link[parallel]{mcmapply}} (\code{mc.preschedule}, \code{mc.set.seed},
+#'   passed to \code{\link[parallel]{mcmapply}} (\code{mc.preschedule} (overwriting \code{load.balancing}),
+#'   \code{mc.set.seed},
 #'   \code{mc.silent} and \code{mc.cleanup} are supported for multicore).
 #' @return Nothing.
 #' @export
-parallelStart = function(mode, cpus, socket.hosts, bj.resources = list(), logging, storagedir, level, show.info,
-  suppress.local.errors = FALSE, ...) {
+parallelStart = function(mode, cpus, socket.hosts, bj.resources = list(), bt.resources = list(), logging, storagedir, level, load.balancing = FALSE,
+  show.info, suppress.local.errors = FALSE, ...) {
   # if stop was not called, warn and do it now
   if (isStatusStarted() && !isModeLocal()) {
     warningf("Parallelization was not stopped, doing it now.")
@@ -104,12 +112,14 @@ parallelStart = function(mode, cpus, socket.hosts, bj.resources = list(), loggin
   storagedir = getPMDefOptStorageDir(storagedir)
   # defaults are in batchjobs conf
   assertList(bj.resources)
+  assertList(bt.resources)
+  assertFlag(load.balancing)
   show.info = getPMDefOptShowInfo(show.info)
 
   # multicore not supported on windows
   if (mode == MODE_MULTICORE && .Platform$OS.type == "windows")
     stop("Multicore mode not supported on windows!")
-  assertDirectory(storagedir, access = "w")
+  assertDirectoryExists(storagedir, access = "w")
 
   # store options for session, we already need them for helper funs below
   options(parallelMap.mode = mode)
@@ -117,6 +127,8 @@ parallelStart = function(mode, cpus, socket.hosts, bj.resources = list(), loggin
   options(parallelMap.logging = logging)
   options(parallelMap.storagedir = storagedir)
   options(parallelMap.bj.resources = bj.resources)
+  options(parallelMap.bt.resources = bt.resources)
+  options(parallelMap.load.balancing = load.balancing)
   options(parallelMap.show.info = show.info)
   options(parallelMap.status = STATUS_STARTED)
   options(parallelMap.nextmap = 1L)
@@ -152,7 +164,9 @@ parallelStart = function(mode, cpus, socket.hosts, bj.resources = list(), loggin
 
   # init parallel packs / modes, if necessary
   if (isModeMulticore()) {
-    cl = makeMulticoreCluster(...)
+    args = list(...)
+    args$mc.preschedule = args$mc.preschedule %??% !load.balancing
+    cl = do.call(makeMulticoreCluster, args)
   } else if (isModeSocket()) {
     # set names from cpus or socket.hosts, only 1 can be defined here
     if (is.na(cpus)) {
@@ -169,45 +183,57 @@ parallelStart = function(mode, cpus, socket.hosts, bj.resources = list(), loggin
   } else if (isModeBatchJobs()) {
     # create registry in selected directory with random, unique name
     fd = getBatchJobsNewRegFileDir()
-    wd = getwd()
     suppressMessages({
-      reg = BatchJobs::makeRegistry(id = basename(fd), file.dir = fd, work.dir = wd)
+      BatchJobs::makeRegistry(id = basename(fd), file.dir = fd, work.dir = getwd())
     })
+  } else if (isModeBatchtools()) {
+    fd = getBatchtoolsNewRegFileDir()
+    old = getOption("batchtools.verbose")
+    options(batchtools.verbose = FALSE)
+    on.exit(options(batchtools.verbose = old))
+    reg = batchtools::makeRegistry(file.dir = fd, work.dir = getwd())
   }
   invisible(NULL)
 }
 
 #' @export
 #' @rdname parallelStart
-parallelStartLocal = function(show.info, suppress.local.errors = FALSE) {
+parallelStartLocal = function(show.info, suppress.local.errors = FALSE, ...) {
   parallelStart(mode = MODE_LOCAL, cpus = NA_integer_, level = NA_character_,
-    logging = FALSE, show.info = show.info, suppress.local.errors = suppress.local.errors)
+    logging = FALSE, show.info = show.info, suppress.local.errors = suppress.local.errors, ...)
 }
 
 #' @export
 #' @rdname parallelStart
-parallelStartMulticore = function(cpus, logging, storagedir, level, show.info, ...) {
+parallelStartMulticore = function(cpus, logging, storagedir, level, load.balancing = FALSE, show.info, ...) {
   parallelStart(mode = MODE_MULTICORE, cpus = cpus, level = level, logging = logging,
-    storagedir = storagedir, show.info = show.info, ...)
+    storagedir = storagedir, load.balancing = load.balancing, show.info = show.info, ...)
 }
 
 #' @export
 #' @rdname parallelStart
-parallelStartSocket = function(cpus, socket.hosts, logging, storagedir, level, show.info, ...) {
+parallelStartSocket = function(cpus, socket.hosts, logging, storagedir, level, load.balancing = FALSE, show.info, ...) {
   parallelStart(mode = MODE_SOCKET, cpus = cpus, socket.hosts = socket.hosts, level = level, logging = logging,
-    storagedir = storagedir, show.info = show.info, ...)
+    storagedir = storagedir, load.balancing = load.balancing, show.info = show.info, ...)
 }
 
 #' @export
 #' @rdname parallelStart
-parallelStartMPI = function(cpus, logging, storagedir, level, show.info, ...) {
+parallelStartMPI = function(cpus, logging, storagedir, level, load.balancing = FALSE, show.info, ...) {
   parallelStart(mode = MODE_MPI, cpus = cpus, level = level, logging = logging,
-    storagedir = storagedir, show.info = show.info, ...)
+    storagedir = storagedir, load.balancing = load.balancing, show.info = show.info, ...)
 }
 
 #' @export
 #' @rdname parallelStart
-parallelStartBatchJobs = function(bj.resources = list(), logging, storagedir, level, show.info) {
+parallelStartBatchJobs = function(bj.resources = list(), logging, storagedir, level, show.info, ...) {
   parallelStart(mode = MODE_BATCHJOBS, level = level, logging = logging,
-    storagedir = storagedir, bj.resources = bj.resources, show.info = show.info)
+    storagedir = storagedir, bj.resources = bj.resources, show.info = show.info, ...)
+}
+
+#' @export
+#' @rdname parallelStart
+parallelStartBatchtools = function(bt.resources = list(), logging, storagedir, level, show.info, ...) {
+  parallelStart(mode = MODE_BATCHTOOLS, level = level, logging = logging,
+    storagedir = storagedir, bt.resources = bt.resources, show.info = show.info, ...)
 }

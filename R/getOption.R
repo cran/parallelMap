@@ -32,6 +32,10 @@ getPMOptLevel = function() {
   getPMOption("level")
 }
 
+getPMOptLoadBalancing = function() {
+  getPMOption("load.balancing")
+}
+
 getPMOptShowInfo = function() {
   getPMOption("show.info")
 }
@@ -42,6 +46,10 @@ getPMOptStorageDir = function() {
 
 getPMOptBatchJobsResources = function() {
   getPMOption("bj.resources", list())
+}
+
+getPMOptBatchtoolsResources = function() {
+  getPMOption("bt.resources", list())
 }
 
 getPMOptNextMap = function() {
@@ -126,6 +134,11 @@ isModeMPI = function() {
 isModeBatchJobs = function() {
   getPMOptMode() == MODE_BATCHJOBS
 }
+
+isModeBatchtools = function() {
+  getPMOptMode() == MODE_BATCHTOOLS
+}
+
 
 ##### status #####
 

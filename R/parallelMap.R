@@ -10,7 +10,7 @@
 #' Large objects can be separately exported via \code{\link{parallelExport}},
 #' they can be simply used under their exported name in slave body code.
 #'
-#' Regarding errorhandling, see the argument \code{impute.error}.
+#' Regarding error handling, see the argument \code{impute.error}.
 #'
 #' @param fun [\code{function}]\cr
 #'   Function to map over \code{...}.
@@ -79,6 +79,7 @@ parallelMap = function(fun, ..., more.args = list(), simplify = FALSE, use.names
     stopf("Level '%s' not registered", level)
 
   cpus = getPMOptCpus()
+  load.balancing = getPMOptLoadBalancing()
   logging = getPMOptLogging()
   # use NA to encode "no logging" in logdir
   logdir = ifelse(logging, getNextLogDir(), NA_character_)
@@ -101,8 +102,9 @@ parallelMap = function(fun, ..., more.args = list(), simplify = FALSE, use.names
     res = mapply(fun2, ..., MoreArgs = more.args, SIMPLIFY = FALSE, USE.NAMES = FALSE)
   } else {
     iters = seq_along(..1)
-    showInfoMessage("Mapping in parallel: mode = %s; cpus = %i; elements = %i.",
-      getPMOptMode(), getPMOptCpus(), length(iters), show.info = show.info)
+    showInfoMessage("Mapping in parallel%s: mode = %s; level = %s; cpus = %i; elements = %i.",
+      ifelse(load.balancing, " (load balanced)", ""), getPMOptMode(),
+      level, getPMOptCpus(), length(iters), show.info = show.info)
 
     if (isModeMulticore()) {
       more.args = c(list(.fun = fun, .logdir = logdir), more.args)
@@ -110,20 +112,23 @@ parallelMap = function(fun, ..., more.args = list(), simplify = FALSE, use.names
         SIMPLIFY = FALSE, USE.NAMES = FALSE)
     } else if (isModeSocket() || isModeMPI()) {
       more.args = c(list(.fun = fun, .logdir = logdir), more.args)
-      res = clusterMap(cl = NULL, slaveWrapper, ..., .i = iters, MoreArgs = more.args,
-        SIMPLIFY = FALSE, USE.NAMES = FALSE)
+      if (load.balancing) {
+        res = clusterMapLB(cl = NULL, slaveWrapper, ...,  .i = iters, MoreArgs = more.args)
+      } else {
+        res = clusterMap(cl = NULL, slaveWrapper, ..., .i = iters, MoreArgs = more.args, SIMPLIFY = FALSE, USE.NAMES = FALSE)
+      }
     } else if (isModeBatchJobs()) {
-      stop.on.error = is.null(impute.error)
       # dont log extra in BatchJobs
       more.args = c(list(.fun = fun, .logdir = NA_character_), more.args)
       suppressMessages({
         reg = getBatchJobsReg()
-        BatchJobs:::dbRemoveJobs(reg, BatchJobs::getJobIds(reg))
+        # FIXME: this should be exported by BatchJobs ...
+        asNamespace("BatchJobs")$dbRemoveJobs(reg, BatchJobs::getJobIds(reg))
         BatchJobs::batchMap(reg, slaveWrapper, ..., more.args = more.args)
         # increase max.retries a bit, we dont want to abort here prematurely
         # if no resources set we submit with the default ones from the bj conf
         BatchJobs::submitJobs(reg, resources = getPMOptBatchJobsResources(), max.retries = 15)
-        ok = BatchJobs::waitForJobs(reg, stop.on.error = stop.on.error)
+        ok = BatchJobs::waitForJobs(reg, stop.on.error = is.null(impute.error))
       })
       # copy log files of terminated jobs to designated dir
       if (!is.na(logdir)) {
@@ -154,13 +159,55 @@ parallelMap = function(fun, ..., more.args = list(), simplify = FALSE, use.names
         if (length(ids.notdone) > 0L)
           stopWithJobErrorMessages(ids.notdone, msgs, extra.msg)
       }
-      # if we reached this line and error occured, we have impute.error != NULL (NULL --> stop before)
+      # if we reached this line and error occurred, we have impute.error != NULL (NULL --> stop before)
       res = vector("list", length(ids))
       res[ids.done] = BatchJobs::loadResults(reg, simplify = FALSE, use.names = FALSE)
       res[ids.notdone] = lapply(msgs, function(s) impute.error.fun(simpleError(s)))
+    } else if (isModeBatchtools()) {
+      # don't log extra in batchtools
+      more.args = insert(more.args, list(.fun = fun, .logdir = NA_character_))
+
+      old = getOption("batchtools.verbose")
+      options(batchtools.verbose = FALSE)
+      on.exit(options(batchtools.verbose = old))
+
+      reg = getBatchtoolsReg()
+      if (nrow(reg$status) > 0L)
+        batchtools::clearRegistry(reg = reg)
+      ids = batchtools::batchMap(fun = slaveWrapper, ..., more.args = more.args, reg = reg)
+      batchtools::submitJobs(ids = ids, resources = getPMOptBatchtoolsResources(), reg = reg)
+      ok = batchtools::waitForJobs(ids = ids, stop.on.error = is.null(impute.error), reg = reg)
+
+      # copy log files of terminated jobs to designated directory
+      if (!is.na(logdir)) {
+        x = batchtools::findStarted(reg = reg)
+        x$log.file = file.path(reg$file.dir, "logs", sprintf("%s.log", x$job.hash))
+        .mapply(function(id, fn) writeLines(batchtools::getLog(id, reg = reg), con = fn), x, NULL)
+      }
+
+      if (ok) {
+        res = batchtools::reduceResultsList(ids, reg = reg)
+      } else {
+        if (is.null(impute.error)) {
+          extra.msg = sprintf("Please note that remaining jobs were killed when 1st error occurred to save cluster time.\nIf you want to further debug errors, your batchtools registry is here:\n%s",
+            reg$file.dir)
+          batchtools::killJobs(reg = reg)
+          ids.notdone = batchtools::findNotDone(reg = reg)
+          stopWithJobErrorMessages(
+            inds = ids.notdone$job.id,
+            batchtools::getErrorMessages(ids.notdone, missing.as.error = TRUE, reg = reg)$message,
+            extra.msg)
+        } else { # if we reached this line and error occurred, we have impute.error != NULL (NULL --> stop before)
+          res = batchtools::findJobs(reg = reg)
+          res$result = list()
+          ids.complete = batchtools::findDone(reg = reg)
+          ids.incomplete = batchtools::findNotDone(reg = reg)
+          res[ids.complete, data.table::`:=`("result", batchtools::reduceResultsList(ids.complete, reg = reg)), with = FALSE]
+          ids[ids.complete, data.table::`:=`("result", lapply(batchtools::getErrorMessages(ids.incomplete, reg = reg)$message, simpleError)), with = FALSE]
+        }
+      }
     }
   }
-
 
   # handle potential errors in res, depending on user setting
   if (is.null(impute.error)) {

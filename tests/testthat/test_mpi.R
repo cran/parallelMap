@@ -8,7 +8,7 @@ if (interactive()) {
     partest1()
     parallelStop()
 
-    parallelStartMPI(2)
+    parallelStartMPI(2, load.balancing = TRUE)
     partest1()
     parallelStop()
 
@@ -30,6 +30,10 @@ if (interactive()) {
 
     parallelStartMPI(2)
     partest6(slave.error.test=TRUE)
+    parallelStop()
+
+    parallelStartMPI(2, load.balancing = TRUE)
+    partest7()
     parallelStop()
   })
 }

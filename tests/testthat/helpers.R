@@ -104,13 +104,13 @@ partest4 = function(slave.error.test) {
 partest5 = function() {
   # exception is thrown on master
   f = function(i) {
-  if(i == 1)
+  if (i == 1)
     stop("foo")
   else
     i
   }
   y = parallelMap(f, 1:2, impute.error = identity)
-  expect_true(is.error(y[[1L]]))
+  expect_true(BBmisc::is.error(y[[1L]]))
   expect_equal(y[[2L]], 2L)
   y = parallelMap(f, 1:2, impute.error = function(x) 123)
   expect_equal(y[[1L]], 123L)
@@ -139,6 +139,23 @@ partest6 = function(slave.error.test) {
     expect_error(parallelSource(fn, "foo", master=FALSE),
       "Files could not be sourced on all slaves: foo.")
   }
+}
+
+# test that load balancing is active
+partest7 = function() {
+   f = function(i) {
+      if (i == 1) {
+        Sys.sleep(9)
+      } else {
+        Sys.sleep(1)
+      }
+      return(i)
+    }
+    st = system.time({
+      ys = parallelMap(f, 1:10, simplify = TRUE)
+    })
+    expect_equal(ys, 1:10)
+    expect_true(st[3L] < 10)
 }
 
 

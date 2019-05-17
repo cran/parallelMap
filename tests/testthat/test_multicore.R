@@ -11,6 +11,10 @@ if (isExpensiveExampleOk()) {
     partest1()
     parallelStop()
 
+    parallelStartMulticore(2, load.balancing = TRUE)
+    partest1()
+    parallelStop()
+
     expect_error(parallelStartMulticore(storagedir = "xxx"))
 
     parallelStartMulticore(2, logging = TRUE, storagedir = tempdir())
@@ -29,21 +33,10 @@ if (isExpensiveExampleOk()) {
     parallelStartMulticore(2)
     partest6(slave.error.test = FALSE)
     parallelStop()
-  })
 
-  test_that("multicore does not run sequentially", {
-    f = function(i) {
-      Sys.sleep(5)
-      i
-    }
-
-    parallelStartMulticore(cpus = 2L)
-    st = system.time({
-      ys = parallelMap(f, 1:2, simplify = TRUE)
-    })
+    parallelStartMulticore(2, load.balancing = TRUE)
+    partest7()
     parallelStop()
 
-    expect_equal(ys, 1:2)
-    expect_true(st[3L] < 8)
   })
 }
