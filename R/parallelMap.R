@@ -2,55 +2,53 @@
 #'
 #' @description
 #' Uses the parallelization mode and the other options specified in
-#' \code{\link{parallelStart}}.
+#' [parallelStart()].
 #'
 #' Libraries and source file can be initialized on slaves with
-#' \code{\link{parallelLibrary}} and \code{\link{parallelSource}}.
+#' [parallelLibrary()] and [parallelSource()].
 #'
-#' Large objects can be separately exported via \code{\link{parallelExport}},
+#' Large objects can be separately exported via [parallelExport()],
 #' they can be simply used under their exported name in slave body code.
 #'
-#' Regarding error handling, see the argument \code{impute.error}.
+#' Regarding error handling, see the argument `impute.error`.
 #'
-#' @param fun [\code{function}]\cr
-#'   Function to map over \code{...}.
-#' @param ... [any]\cr
+#' @param fun [function]\cr
+#'   Function to map over `...`.
+#' @param ... (any)\cr
 #'   Arguments to vectorize over (list or vector).
-#' @param more.args [\code{list}]\cr
-#'   A list of other arguments passed to \code{fun}.
+#' @param more.args [list]\cr
+#'   A list of other arguments passed to `fun`.
 #'   Default is empty list.
-#' @param simplify [\code{logical(1)}]\cr
-#'   Should the result be simplified?
-#'   See \code{\link{sapply}}.
-#'   Default is \code{FALSE}.
-#' @param use.names [\code{logical(1)}]\cr
-#'   Should result be named by first vector if that is
-#'   of class character?
-#'   Default is \code{FALSE}.
-#' @param impute.error [\code{NULL} | \code{function(x)}]\cr
-#'   This argument can be used for improved error handling.
-#'   \code{NULL} means that, if an exception is generated on one of the slaves, it is also
-#'   thrown on the master. Usually all slave jobs will have to terminate until this exception on
-#'   the master can be thrown.
-#'   If you pass a constant value or a function, all jobs are guaranteed to return a result object,
-#'   without generating an exception on the master for slave errors.
-#'   In case of an error,
-#'   this is a \code{\link{simpleError}} object containing the error message.
-#'   If you passed a constant object, the error-objects will be substituted with this object.
-#'   If you passed a function, it will be used to operate
-#'   on these error-objects (it will ONLY be applied to the error results).
-#'   For example, using \code{identity} would  keep and return the \code{simpleError}-object,
-#'   or \code{function(x) 99} would impute a constant value
-#'   (which could be achieved more easily by simply passing \code{99}).
-#'   Default is \code{NULL}.
-#' @param level [\code{character(1)}]\cr
-#'   If a (non-missing) level is specified in \code{\link{parallelStart}},
+#' @param simplify (`logical(1)`)\cr
+#'   Should the result be simplified? See [simplify2array]. If `TRUE`,
+#'   `simplify2array(higher = TRUE)` will be called on the result object.
+#'   Default is `FALSE`.
+#' @param use.names (`logical(1)`)\cr
+#'   Should result be named?
+#'   Use names if the first `...` argument has names, or if it is a
+#'   character vector, use that character vector as the names.
+#' @param impute.error (`NULL` | `function(x)`)\cr
+#'   This argument can be used for improved error handling. `NULL` means that,
+#'   if an exception is generated on one of the slaves, it is also thrown on the
+#'   master. Usually all slave jobs will have to terminate until this exception
+#'   on the master can be thrown. If you pass a constant value or a function,
+#'   all jobs are guaranteed to return a result object, without generating an
+#'   exception on the master for slave errors. In case of an error, this is a
+#'   [simpleError()] object containing the error message. If you passed a
+#'   constant object, the error-objects will be substituted with this object. If
+#'   you passed a function, it will be used to operate on these error-objects
+#'   (it will ONLY be applied to the error results). For example, using
+#'   `identity` would  keep and return the `simpleError`-object, or `function(x)
+#'   99` would impute a constant value (which could be achieved more easily by
+#'   simply passing `99`). Default is `NULL`.
+#' @param level (`character(1)`)\cr
+#'   If a (non-missing) level is specified in [parallelStart()],
 #'   this call is only parallelized if the level specified here matches.
 #'   Useful if this function is used in a package.
-#'   Default is \code{NA}.
-#' @param show.info [\code{logical(1)}]\cr
+#'   Default is `NA`.
+#' @param show.info (`logical(1)`)\cr
 #'   Verbose output on console?
-#'   Can be used to override setting from options / \code{\link{parallelStart}}.
+#'   Can be used to override setting from options / [parallelStart()].
 #'   Default is NA which means no overriding.
 #' @return Result.
 #' @export
@@ -58,8 +56,9 @@
 #' parallelStart()
 #' parallelMap(identity, 1:2)
 #' parallelStop()
-parallelMap = function(fun, ..., more.args = list(), simplify = FALSE, use.names = FALSE,
-  impute.error = NULL, level = NA_character_, show.info = NA) {
+parallelMap = function(fun, ..., more.args = list(), simplify = FALSE,
+  use.names = FALSE, impute.error = NULL, level = NA_character_,
+  show.info = NA) {
 
   assertFunction(fun)
   assertList(more.args)
@@ -67,31 +66,34 @@ parallelMap = function(fun, ..., more.args = list(), simplify = FALSE, use.names
   assertFlag(use.names)
   # if it is a constant value construct function to impute
   if (!is.null(impute.error)) {
-    if (is.function(impute.error))
+    if (is.function(impute.error)) {
       impute.error.fun = impute.error
-    else
+    } else {
       impute.error.fun = function(x) impute.error
+    }
   }
   assertString(level, na.ok = TRUE)
   assertFlag(show.info, na.ok = TRUE)
 
-  if (!is.na(level) && level %nin% unlist(getPMOption("registered.levels", list())))
+  if (!is.na(level) && level %nin% unlist(getPMOption("registered.levels", list()))) {
     stopf("Level '%s' not registered", level)
+  }
 
   cpus = getPMOptCpus()
   load.balancing = getPMOptLoadBalancing()
   logging = getPMOptLogging()
+  reproducible = getPMOptReproducible()
   # use NA to encode "no logging" in logdir
   logdir = ifelse(logging, getNextLogDir(), NA_character_)
 
   if (isModeLocal() || !isParallelizationLevel(level) || getPMOptOnSlave()) {
     if (!is.null(impute.error)) {
       # so we behave in local mode as in parallelSlaveWrapper
-      fun2 = function (...) {
+      fun2 = function(...) {
         res = try(fun(...), silent = getOption("parallelMap.suppress.local.errors"))
-        if (is.error(res)) {
+        if (BBmisc::is.error(res)) {
           res = list(try.object = res)
-          class(res) =  "parallelMapErrorWrapper"
+          class(res) = "parallelMapErrorWrapper"
         }
         return(res)
       }
@@ -108,14 +110,31 @@ parallelMap = function(fun, ..., more.args = list(), simplify = FALSE, use.names
 
     if (isModeMulticore()) {
       more.args = c(list(.fun = fun, .logdir = logdir), more.args)
-      res = MulticoreClusterMap(slaveWrapper, ..., .i = iters, MoreArgs = more.args, mc.cores = cpus,
+      if (reproducible) {
+        old.seed = .Random.seed
+        old.rng.kind = RNGkind()
+        seed = sample(1:100000, 1)
+        # we need to reset the seed first in case the user supplied a seed,
+        # otherwise "L'Ecuyer-CMRG" won't be used
+        rm(.Random.seed, envir = globalenv())
+        set.seed(seed, "L'Ecuyer-CMRG")
+      }
+      res = MulticoreClusterMap(slaveWrapper, ..., .i = iters,
+        MoreArgs = more.args, mc.cores = cpus,
         SIMPLIFY = FALSE, USE.NAMES = FALSE)
+      if (reproducible) {
+        # restore initial RNGkind
+        .Random.seed = old.seed
+        RNGkind(old.rng.kind[1], old.rng.kind[2], old.rng.kind[3])
+      }
     } else if (isModeSocket() || isModeMPI()) {
       more.args = c(list(.fun = fun, .logdir = logdir), more.args)
       if (load.balancing) {
-        res = clusterMapLB(cl = NULL, slaveWrapper, ...,  .i = iters, MoreArgs = more.args)
+        res = clusterMapLB(cl = NULL, slaveWrapper, ..., .i = iters,
+          MoreArgs = more.args)
       } else {
-        res = clusterMap(cl = NULL, slaveWrapper, ..., .i = iters, MoreArgs = more.args, SIMPLIFY = FALSE, USE.NAMES = FALSE)
+        res = clusterMap(cl = NULL, slaveWrapper, ..., .i = iters,
+          MoreArgs = more.args, SIMPLIFY = FALSE, USE.NAMES = FALSE)
       }
     } else if (isModeBatchJobs()) {
       # dont log extra in BatchJobs
@@ -154,10 +173,12 @@ parallelMap = function(fun, ..., more.args = list(), simplify = FALSE, use.names
           BatchJobs::killJobs(reg, onsys)
         )
         onsys = BatchJobs::findOnSystem(reg)
-        if (length(onsys) > 0L)
+        if (length(onsys) > 0L) {
           warningf("Still %i jobs from operation on system! kill them manually!", length(onsys))
-        if (length(ids.notdone) > 0L)
+        }
+        if (length(ids.notdone) > 0L) {
           stopWithJobErrorMessages(ids.notdone, msgs, extra.msg)
+        }
       }
       # if we reached this line and error occurred, we have impute.error != NULL (NULL --> stop before)
       res = vector("list", length(ids))
@@ -172,8 +193,9 @@ parallelMap = function(fun, ..., more.args = list(), simplify = FALSE, use.names
       on.exit(options(batchtools.verbose = old))
 
       reg = getBatchtoolsReg()
-      if (nrow(reg$status) > 0L)
+      if (nrow(reg$status) > 0L) {
         batchtools::clearRegistry(reg = reg)
+      }
       ids = batchtools::batchMap(fun = slaveWrapper, ..., more.args = more.args, reg = reg)
       batchtools::submitJobs(ids = ids, resources = getPMOptBatchtoolsResources(), reg = reg)
       ok = batchtools::waitForJobs(ids = ids, stop.on.error = is.null(impute.error), reg = reg)
@@ -214,21 +236,24 @@ parallelMap = function(fun, ..., more.args = list(), simplify = FALSE, use.names
     checkResultsAndStopWithErrorsMessages(res)
   } else {
     res = lapply(res, function(x) {
-      if (inherits(x, "parallelMapErrorWrapper"))
+      if (inherits(x, "parallelMapErrorWrapper")) {
         impute.error.fun(attr(x$try.object, "condition"))
-      else
+      } else {
         x
+      }
     })
   }
 
-  if (use.names && is.character(..1)) {
+  if (use.names && !is.null(names(..1))) {
+    names(res) = names(..1)
+  } else if (use.names && is.character(..1)) {
     names(res) = ..1
-  }
-  if (!use.names) {
+  } else if (!use.names) {
     names(res) = NULL
   }
-  if (isTRUE(simplify) && length(res) > 0L)
-    res = simplify2array(res, higher = (simplify == "array"))
+  if (isTRUE(simplify) && length(res) > 0L) {
+    res = simplify2array(res, higher = simplify)
+  }
 
   # count number of mapping operations for log dir
   options(parallelMap.nextmap = (getPMOptNextMap() + 1L))
@@ -237,6 +262,7 @@ parallelMap = function(fun, ..., more.args = list(), simplify = FALSE, use.names
 }
 
 slaveWrapper = function(..., .i, .fun, .logdir = NA_character_) {
+
   if (!is.na(.logdir)) {
     options(warning.length = 8170L, warn = 1L)
     .fn = file.path(.logdir, sprintf("%05i.log", .i))
@@ -256,9 +282,9 @@ slaveWrapper = function(..., .i, .fun, .logdir = NA_character_) {
   # wrap in try block so we can handle error on master
   res = try(.fun(...))
   # now we cant simply return the error object, because clusterMap would act on it. great...
-  if (is.error(res)) {
+  if (BBmisc::is.error(res)) {
     res = list(try.object = res)
-    class(res) =  "parallelMapErrorWrapper"
+    class(res) = "parallelMapErrorWrapper"
   }
   if (!is.na(.logdir)) {
     .end.time = as.integer(Sys.time())
@@ -274,9 +300,11 @@ assignInFunctionNamespace = function(fun, li = list(), env = new.env()) {
   # copy exported objects in PKG_LOCAL_ENV to env of fun so we can find them in any case in call
   ee = environment(fun)
   ns = ls(env)
-  for (n in ns)
+  for (n in ns) {
     assign(n, get(n, envir = env), envir = ee)
+  }
   ns = names(li)
-  for (n in ns)
+  for (n in ns) {
     assign(n, li[[n]], envir = ee)
+  }
 }
