@@ -1,3 +1,11 @@
+<!-- NEWS.md is maintained by https://cynkra.github.io/fledge, do not edit -->
+
+# parallelMap 1.5.1
+
+- Removed "LazyDate" field from DESCRIPTION.
+- Fixed broken URLs.
+
+
 # parallelMap 1.5.0
 
 - `parallelLapply()` does not drop list element names anymore (#58)
